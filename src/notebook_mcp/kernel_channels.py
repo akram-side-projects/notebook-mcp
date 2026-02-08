@@ -190,16 +190,24 @@ def execute_code(
 
     import asyncio
 
-    res = asyncio.run(
-        _execute_via_ws(
-            base_url=base_url,
-            token=token,
-            kernel_id=kernel_id,
-            code=code,
-            timeout_s=timeout_s,
-            user_expressions=user_expressions,
-        )
+    coro = _execute_via_ws(
+        base_url=base_url,
+        token=token,
+        kernel_id=kernel_id,
+        code=code,
+        timeout_s=timeout_s,
+        user_expressions=user_expressions,
     )
+
+    try:
+        # Check if we're already in an event loop (e.g., MCP server context)
+        loop = asyncio.get_running_loop()
+        # Already in a loop: schedule coroutine and get result via run_coroutine_threadsafe
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        res = future.result()
+    except RuntimeError:
+        # No running loop: safe to use asyncio.run()
+        res = asyncio.run(coro)
 
     return {
         "status": res.status,
