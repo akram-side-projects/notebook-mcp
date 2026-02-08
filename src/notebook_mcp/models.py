@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -76,3 +77,17 @@ class JupyterKernel(BaseModel):
     execution_state: str | None = None
     connections: int | None = None
     raw: dict[str, Any] = Field(default_factory=dict)
+
+
+ExecutionStatus = Literal["pending", "running", "completed", "failed"]
+
+
+class ExecutionTask(BaseModel):
+    execution_id: str
+    kernel_id: str
+    code: str
+    status: ExecutionStatus
+    outputs: list = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+    error: str | None = None

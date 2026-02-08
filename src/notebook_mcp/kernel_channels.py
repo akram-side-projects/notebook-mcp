@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import websockets
 
 from .errors import JupyterServerError
+from .models import ExecutionTask
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -94,7 +101,7 @@ async def _execute_via_ws(
     deadline = time.time() + timeout_s
 
     try:
-        async with websockets.connect(ws, max_size=16 * 1024 * 1024) as sock:
+        async with websockets.connect(ws, max_size=16 * 1024 * 1024, open_timeout=10) as sock:
             await sock.send(json.dumps(request))
 
             got_execute_reply = False
@@ -102,7 +109,7 @@ async def _execute_via_ws(
 
             while time.time() < deadline:
                 remaining = max(0.1, deadline - time.time())
-                raw = await asyncio_wait_for(sock.recv(), timeout=remaining)
+                raw = await asyncio.wait_for(sock.recv(), timeout=remaining)
                 if not isinstance(raw, str):
                     # Jupyter typically sends text frames.
                     continue
@@ -174,7 +181,225 @@ async def _execute_via_ws(
     )
 
 
-def execute_code(
+@dataclass
+class _QueueItem:
+    task: ExecutionTask
+    timeout_s: float
+
+
+class KernelWorker:
+    def __init__(self, *, base_url: str, token: str | None, kernel_id: str) -> None:
+        self._base_url = base_url
+        self._token = token
+        self._kernel_id = kernel_id
+
+        self._queue: asyncio.Queue[_QueueItem] = asyncio.Queue()
+        self._runner: asyncio.Task[None] | None = None
+        self._closed = False
+
+        self._cancelled: set[str] = set()
+        self._current: str | None = None
+        self._sock: websockets.WebSocketClientProtocol | None = None
+
+    @property
+    def is_closed(self) -> bool:
+        return self._closed
+
+    def enqueue(self, task: ExecutionTask, *, timeout_s: float) -> None:
+        if self._closed:
+            raise JupyterServerError(f"Kernel worker is closed for kernel_id={self._kernel_id}")
+        self._queue.put_nowait(_QueueItem(task=task, timeout_s=timeout_s))
+        if self._runner is None or self._runner.done():
+            self._runner = asyncio.create_task(self._run(), name=f"kernel-worker:{self._kernel_id}")
+
+    def cancel(self, execution_id: str) -> None:
+        self._cancelled.add(execution_id)
+        # Best-effort: we only mark the execution as cancelled; we do not send
+        # an interrupt request (requires additional Jupyter REST calls) and we do
+        # not tear down the worker connection.
+
+    def close(self) -> None:
+        self._closed = True
+        if self._sock is not None:
+            asyncio.create_task(self._sock.close())
+        if self._runner is not None:
+            self._runner.cancel()
+
+    def _mark_failed(self, task: ExecutionTask, msg: str) -> None:
+        task.status = "failed"
+        task.error = msg
+        task.updated_at = datetime.now(UTC)
+
+    async def _run(self) -> None:
+        ws = _ws_url(self._base_url, self._kernel_id, self._token)
+        try:
+            async with websockets.connect(ws, max_size=16 * 1024 * 1024, open_timeout=10) as sock:
+                self._sock = sock
+                while not self._closed:
+                    item = await self._queue.get()
+                    task = item.task
+
+                    if task.execution_id in self._cancelled:
+                        self._cancelled.discard(task.execution_id)
+                        self._mark_failed(task, "cancelled")
+                        self._queue.task_done()
+                        continue
+
+                    self._current = task.execution_id
+                    task.status = "running"
+                    task.updated_at = datetime.now(UTC)
+                    logger.info(
+                        "execution_started",
+                        extra={"execution_id": task.execution_id, "kernel_id": self._kernel_id},
+                    )
+
+                    try:
+                        await self._execute_one(sock, task, timeout_s=item.timeout_s)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:  # noqa: BLE001
+                        self._mark_failed(task, "websocket_execution_failed")
+                        logger.info(
+                            "execution_failed",
+                            extra={
+                                "execution_id": task.execution_id,
+                                "kernel_id": self._kernel_id,
+                                "error": str(e),
+                            },
+                        )
+
+                    self._current = None
+                    self._queue.task_done()
+
+        except Exception as e:  # noqa: BLE001
+            # Mark anything currently queued as failed; worker will be recreated lazily.
+            try:
+                while True:
+                    item = self._queue.get_nowait()
+                    self._mark_failed(item.task, "kernel_worker_disconnected")
+                    self._queue.task_done()
+            except asyncio.QueueEmpty:
+                pass
+            logger.info(
+                "execution_failed",
+                extra={"kernel_id": self._kernel_id, "error": f"kernel_worker_disconnected:{e}"},
+            )
+            return
+        finally:
+            self._sock = None
+            self._closed = True
+
+    async def _execute_one(
+        self,
+        sock: websockets.WebSocketClientProtocol,
+        task: ExecutionTask,
+        *,
+        timeout_s: float,
+    ) -> None:
+        session = uuid.uuid4().hex
+        header = _make_header("execute_request", session)
+        request_msg_id = header["msg_id"]
+        request = {
+            "header": header,
+            "parent_header": {},
+            "metadata": {},
+            "content": {
+                "code": task.code,
+                "silent": False,
+                "store_history": False,
+                "user_expressions": {},
+                "allow_stdin": False,
+                "stop_on_error": True,
+            },
+            "channel": "shell",
+            "buffers": [],
+        }
+
+        await sock.send(json.dumps(request))
+        deadline = time.time() + timeout_s
+
+        got_execute_reply = False
+        got_idle = False
+        saw_error = False
+
+        while time.time() < deadline and not self._closed:
+            if task.execution_id in self._cancelled:
+                self._cancelled.discard(task.execution_id)
+                self._mark_failed(task, "cancelled")
+                return
+
+            remaining = max(0.1, deadline - time.time())
+            raw = await asyncio.wait_for(sock.recv(), timeout=remaining)
+            if not isinstance(raw, str):
+                continue
+
+            msg = json.loads(raw)
+            msg_type = (msg.get("header") or {}).get("msg_type")
+            channel = msg.get("channel")
+            content = msg.get("content") or {}
+            parent = msg.get("parent_header") or {}
+            parent_id = parent.get("msg_id")
+
+            # Filter to messages for this execute_request where possible.
+            if parent_id and parent_id != request_msg_id:
+                continue
+
+            if msg_type == "stream" and channel == "iopub":
+                name = content.get("name")
+                text = content.get("text") or ""
+                task.outputs.append({"type": "stream", "name": name, "text": text})
+                task.updated_at = datetime.now(UTC)
+
+            elif msg_type == "execute_result" and channel == "iopub":
+                task.outputs.append({"type": "execute_result", "content": content})
+                task.updated_at = datetime.now(UTC)
+
+            elif msg_type == "display_data" and channel == "iopub":
+                task.outputs.append({"type": "display_data", "content": content})
+                task.updated_at = datetime.now(UTC)
+
+            elif msg_type == "error" and channel == "iopub":
+                saw_error = True
+                task.outputs.append({"type": "error", "content": content})
+                task.updated_at = datetime.now(UTC)
+
+            elif msg_type == "execute_reply" and channel == "shell":
+                got_execute_reply = True
+                if content.get("status") == "error":
+                    saw_error = True
+
+            elif msg_type == "status" and channel == "iopub":
+                if content.get("execution_state") == "idle":
+                    got_idle = True
+
+            if got_execute_reply and got_idle:
+                break
+
+        if not (got_execute_reply and got_idle):
+            self._mark_failed(task, "timeout")
+            logger.info(
+                "execution_failed",
+                extra={"execution_id": task.execution_id, "kernel_id": self._kernel_id, "error": "timeout"},
+            )
+            return
+
+        if saw_error:
+            self._mark_failed(task, "error")
+            logger.info(
+                "execution_failed",
+                extra={"execution_id": task.execution_id, "kernel_id": self._kernel_id, "error": "error"},
+            )
+            return
+
+        task.status = "completed"
+        task.updated_at = datetime.now(UTC)
+        logger.info(
+            "execution_completed",
+            extra={"execution_id": task.execution_id, "kernel_id": self._kernel_id},
+        )
+
+
+async def execute_code(
     *,
     base_url: str,
     token: str | None,
@@ -188,9 +413,7 @@ def execute_code(
     This is best-effort: it collects stdout/stderr and returns execute_result/error when available.
     """
 
-    import asyncio
-
-    coro = _execute_via_ws(
+    res = await _execute_via_ws(
         base_url=base_url,
         token=token,
         kernel_id=kernel_id,
@@ -198,16 +421,6 @@ def execute_code(
         timeout_s=timeout_s,
         user_expressions=user_expressions,
     )
-
-    try:
-        # Check if we're already in an event loop (e.g., MCP server context)
-        loop = asyncio.get_running_loop()
-        # Already in a loop: schedule coroutine and get result via run_coroutine_threadsafe
-        future = asyncio.run_coroutine_threadsafe(coro, loop)
-        res = future.result()
-    except RuntimeError:
-        # No running loop: safe to use asyncio.run()
-        res = asyncio.run(coro)
 
     return {
         "status": res.status,
@@ -225,7 +438,7 @@ def execute_code(
     }
 
 
-def inspect_variable(
+async def inspect_variable(
     *,
     base_url: str,
     token: str | None,
@@ -243,7 +456,7 @@ def inspect_variable(
         "repr": f"repr({expression})",
     }
 
-    return execute_code(
+    return await execute_code(
         base_url=base_url,
         token=token,
         kernel_id=kernel_id,
@@ -254,6 +467,4 @@ def inspect_variable(
 
 
 async def asyncio_wait_for(awaitable, timeout: float):
-    import asyncio
-
     return await asyncio.wait_for(awaitable, timeout=timeout)
