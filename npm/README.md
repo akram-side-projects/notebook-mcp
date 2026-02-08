@@ -1,27 +1,94 @@
-# notebook-mcp (NPM)
+# Notebook MCP
 
-This is an NPM wrapper for the **Python** package `notebook-mcp`.
+![Notebook MCP](../docs/notebook-mcp-pproduct-img.png)
 
-## Install
+AI-Native Intelligence Layer for Jupyter Notebooks using the Model Context Protocol (MCP)
 
-```bash
-npm i -g @akram1110/notebook-mcp
+Notebook MCP enables AI assistants (Cursor, Windsurf, Claude Desktop, etc.) to properly understand, analyze, and interact with `.ipynb` notebooks.
+
+---
+
+## ✨ Features
+
+* Builds dependency graphs across notebook cells
+* Detects stale and unexecuted cells
+* Generates rerun plans automatically
+* Provides focused context slices for LLM reasoning
+* Converts notebooks into deterministic Python scripts
+* Integrates with live Jupyter kernels
+* Allows runtime execution and variable inspection
+
+---
+
+## 📦 Installation
+
+```
+npm install -g @akram1110/notebook-mcp
 ```
 
-## Run
+This CLI automatically installs the Python backend via PyPI.
 
-```bash
+---
+
+## ⚙️ Requirements
+
+* Python 3.10+
+* pip
+* Node.js 18+
+
+---
+
+## 🚀 Usage
+
+Run MCP server:
+
+```
 notebook-mcp
 ```
 
-## Configuration
+---
 
-- `NOTEBOOK_MCP_PYTHON`: path to the Python executable to use
-- `NOTEBOOK_MCP_PIP_SPEC`: pip spec to install (default: `notebook-mcp`)
-- `NOTEBOOK_MCP_PIP_ARGS`: extra args passed to `pip install` (space-separated)
+## 🧠 MCP Tools Provided
 
-Environment variables used by the server:
+### Notebook Analysis
 
-- `MCP_TRANSPORT`: `stdio` (default) or `streamable-http`
-- `MCP_HOST`, `MCP_PORT`
-- `JUPYTER_BASE_URL`, `JUPYTER_TOKEN`
+* notebook_analyze
+* notebook_context
+* notebook_export_script
+* notebook_state
+* notebook_rerun_plan
+
+### Jupyter Runtime
+
+* jupyter_list_sessions
+* jupyter_get_kernel
+* jupyter_execute
+* jupyter_inspect
+
+---
+
+## 🔌 Cursor MCP Configuration
+
+```
+{
+  "mcpServers": {
+    "notebook": {
+      "command": "notebook-mcp"
+    }
+  }
+}
+```
+
+---
+
+## 🌍 Python Backend
+
+Python package is available at:
+
+[https://pypi.org/project/notebook-mcp/](https://pypi.org/project/notebook-mcp/)
+
+---
+
+## 💬 Feedback
+
+Issues and contributions welcome on GitHub.

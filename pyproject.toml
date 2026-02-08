@@ -1,8 +1,8 @@
 [project]
 name = "notebook-mcp"
-version = "0.1.0"
+version = "1.5.0"
 description = "MCP server that provides notebook-aware context and analysis for .ipynb files"
-readme = "README.md"
+readme = "README_PYPI.md"
 requires-python = ">=3.11"
 license = "MIT"
 dependencies = [
@@ -28,6 +28,7 @@ Repository = "https://github.com/akram-side-projects/notebook-mcp"
 
 [project.scripts]
 notebook-mcp = "notebook_mcp.server:main"
+notebook-mcp-python = "notebook_mcp.server:main"
 
 [build-system]
 requires = ["setuptools>=69.0.0", "wheel>=0.42.0"]
