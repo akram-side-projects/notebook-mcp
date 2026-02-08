@@ -80,6 +80,106 @@ notebook-mcp
 
 ---
 
+## 🧹 Uninstallation
+
+Notebook MCP installs components via both npm and pip.
+
+Follow the steps below to fully remove the tool.
+
+---
+
+### Step 1 — Remove npm Wrapper
+
+```
+npm uninstall -g @akram1110/notebook-mcp
+```
+
+---
+
+### Step 2 — Remove Python Backend
+
+```
+pip uninstall notebook-mcp
+```
+
+or
+
+```
+python -m pip uninstall notebook-mcp
+```
+
+---
+
+### Step 3 — Confirm Removal
+
+```
+notebook-mcp
+```
+
+Expected output:
+
+```
+command not found
+```
+
+---
+
+### Step 4 — Windows Only: Remove Leftover Executables
+
+Python sometimes leaves launcher files behind.
+
+Check:
+
+```
+where notebook-mcp
+```
+
+If found, delete from:
+
+```
+<python_install_dir>\Scripts\
+```
+
+Example:
+
+```
+C:\Users\<username>\AppData\Local\Programs\Python\Python311\Scripts\
+```
+
+---
+
+### Step 5 — Clean Corrupted pip Distribution Warnings
+
+If pip shows:
+
+```
+WARNING: Ignoring invalid distribution ~
+```
+
+Delete folders beginning with `~` inside:
+
+```
+<python_install_dir>\Lib\site-packages\
+```
+
+Then verify:
+
+```
+pip check
+```
+
+---
+
+### Step 6 — Optional Cache Cleanup
+
+```
+pip cache purge
+```
+
+---
+
+After completing these steps, Notebook MCP will be fully removed from your system.
+
 ## 🔌 Cursor Integration
 
 ```
