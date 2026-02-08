@@ -1,6 +1,6 @@
 {
   "name": "@akram1110/notebook-mcp",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "NPM wrapper that launches the notebook-mcp Python MCP server",
   "license": "MIT",
   "main": "lib/launcher.js",

@@ -2,6 +2,14 @@ const { spawnSync, spawn } = require("node:child_process");
 const process = require("node:process");
 const which = require("which");
 
+function ok(msg) {
+  process.stdout.write(`✔ ${msg}\n`);
+  // Force flush for immediate visibility
+  if (process.stdout && typeof process.stdout.flush === 'function') {
+    process.stdout.flush();
+  }
+}
+
 function findPython() {
   const explicit = process.env.NOTEBOOK_MCP_PYTHON;
   if (explicit) return explicit;
@@ -34,7 +42,7 @@ function canImportNotebookMcp(python) {
 }
 
 function ensureInstalled(python) {
-  if (canImportNotebookMcp(python)) return;
+  if (canImportNotebookMcp(python)) return false;
 
   const spec = process.env.NOTEBOOK_MCP_PIP_SPEC || "notebook-mcp";
   const extraArgs = (process.env.NOTEBOOK_MCP_PIP_ARGS || "").split(" ").filter(Boolean);
@@ -48,6 +56,8 @@ function ensureInstalled(python) {
         "Check that your Python environment is the one you expect (NOTEBOOK_MCP_PYTHON)."
     );
   }
+
+  return true;
 }
 
 async function launch(argv) {
@@ -59,13 +69,19 @@ async function launch(argv) {
     );
   }
 
-  ensureInstalled(python);
+  ok(`Python detected (${python})`);
+
+  const installed = ensureInstalled(python);
+  if (installed) ok("Backend installed (notebook-mcp)");
+  else ok("Backend already installed (notebook-mcp)");
 
   // Run as module so this works even if Scripts/ is not on PATH.
   const child = spawn(python, ["-m", "notebook_mcp.server", ...argv], {
     stdio: "inherit",
     env: process.env,
   });
+
+  ok("MCP server running");
 
   return new Promise((resolve, reject) => {
     child.on("error", reject);
