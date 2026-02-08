@@ -1,5 +1,7 @@
 # Notebook MCP
 
+![Notebook MCP](docs/notebook-mcp-pproduct-img.png)
+
 AI-Native Intelligence for Jupyter Notebooks
 
 Notebook MCP is a Model Context Protocol (MCP) server that gives AI assistants deep semantic and runtime understanding of `.ipynb` notebooks.
